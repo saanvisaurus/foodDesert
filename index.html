@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.min.js"></script>
 
 <style>
 body {
@@ -42,12 +43,14 @@ body {
     text-transform: uppercase;
 }
 
-.search-input, button {
+.search-input, button, select {
     width: 100%;
     padding: 12px;
     border-radius: 8px;
     border: 2px solid #e5e7eb;
     font-size: 1rem;
+    margin-bottom: 10px;
+    box-sizing: border-box;
 }
 
 button {
@@ -58,11 +61,45 @@ button {
     text-transform: uppercase;
     letter-spacing: 1px;
     cursor: pointer;
-    margin-top: 10px;
+    transition: all 0.2s;
+}
+button:hover {
+    background: #1d4ed8;
+    transform: translateY(-1px);
 }
 button.secondary {
     background: #e5e7eb;
     color: #111827;
+}
+button.secondary:hover {
+    background: #d1d5db;
+}
+
+.slider-container {
+    margin: 15px 0;
+}
+.slider-label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    font-family: JetBrains Mono;
+    font-size: 0.85rem;
+}
+.slider {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: #e5e7eb;
+    outline: none;
+    -webkit-appearance: none;
+}
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #2563eb;
+    cursor: pointer;
 }
 
 .map-container { position: relative; }
@@ -82,6 +119,39 @@ button.secondary {
     z-index: 500;
 }
 
+.legend {
+    position: absolute;
+    bottom: 30px;
+    right: 10px;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 400;
+    font-family: Archivo, sans-serif;
+    min-width: 200px;
+}
+.legend h3 {
+    margin: 0 0 10px 0;
+    font-size: 0.9rem;
+    color: #374151;
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    margin-right: 10px;
+}
+.legend-label {
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
 .store-marker { font-size: 24px; }
 
 .loading {
@@ -95,6 +165,26 @@ button.secondary {
     z-index: 1000;
 }
 .loading.active { display: flex; }
+
+.info-box {
+    position: absolute;
+    top: 70px;
+    right: 10px;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 400;
+    font-family: JetBrains Mono;
+    font-size: 0.8rem;
+    max-width: 250px;
+    display: none;
+}
+.info-box.active { display: block; }
+.info-box h3 {
+    margin-top: 0;
+    color: #374151;
+}
 </style>
 </head>
 
@@ -107,10 +197,34 @@ button.secondary {
         </div>
 
         <div class="control-section">
-            <h2>City</h2>
-            <input id="cityInput" class="search-input" value="Chicago, IL"/>
+            <h2>City Analysis</h2>
+            <input id="cityInput" class="search-input" value="Chicago, IL" placeholder="Enter city, state or zip"/>
+            <select id="analysisMode">
+                <option value="distance">Distance to Stores</option>
+                <option value="density">Store Density</option>
+                <option value="income">Income Level (Simulated)</option>
+            </select>
             <button onclick="analyzeCity()">Analyze Food Access</button>
             <button class="secondary" onclick="toggleLive()">Toggle Live Data</button>
+        </div>
+
+        <div class="control-section">
+            <h2>Risk Visualization</h2>
+            <div class="slider-container">
+                <div class="slider-label">
+                    <span>Risk Sensitivity:</span>
+                    <span id="sensitivityValue">Medium</span>
+                </div>
+                <input type="range" min="1" max="3" value="2" class="slider" id="sensitivitySlider" oninput="updateSensitivity()">
+            </div>
+            <button class="secondary" onclick="toggleRiskLayer()" id="riskToggle">Show Risk Areas</button>
+            <button class="secondary" onclick="toggleInfo()">Show Info</button>
+        </div>
+
+        <div class="control-section">
+            <h2>Layer Controls</h2>
+            <button class="secondary" onclick="clearAll()">Clear Map</button>
+            <button class="secondary" onclick="generateReport()">Generate Report</button>
         </div>
     </div>
 
@@ -118,6 +232,34 @@ button.secondary {
         <div id="map"></div>
         <div class="api-status" id="apiStatus">🔸 DEMO MODE</div>
         <div class="loading" id="loading">Analyzing…</div>
+        
+        <div class="legend" id="legend">
+            <h3>Food Desert Risk</h3>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ef4444;"></div>
+                <div class="legend-label">High Risk (Food Desert)</div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f59e0b;"></div>
+                <div class="legend-label">Medium Risk</div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #10b981;"></div>
+                <div class="legend-label">Low Risk</div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #3b82f6;"></div>
+                <div class="legend-label">Supermarkets</div>
+            </div>
+        </div>
+        
+        <div class="info-box" id="infoBox">
+            <h3>About Risk Areas</h3>
+            <p>• Red: High risk areas (food deserts)</p>
+            <p>• Yellow: Medium risk areas</p>
+            <p>• Green: Well-served areas</p>
+            <p>Risk calculated based on distance to nearest grocery store and store density.</p>
+        </div>
     </div>
 </div>
 
@@ -125,79 +267,242 @@ button.secondary {
 let map;
 let demoMode = true;
 let storeMarkers = [];
+let riskLayer = null;
+let riskVisible = false;
+let heatLayer = null;
 
 const DEMO = {
-    center: [41.8781,-87.6298],
+    center: [41.8781, -87.6298],
     zoom: 11,
     stores: [
-        {name:"Whole Foods",lat:41.89,lng:-87.64},
-        {name:"Aldi",lat:41.83,lng:-87.63},
-        {name:"Jewel-Osco",lat:41.87,lng:-87.65}
+        {name: "Whole Foods", lat: 41.89, lng: -87.64, type: "supermarket"},
+        {name: "Aldi", lat: 41.83, lng: -87.63, type: "supermarket"},
+        {name: "Jewel-Osco", lat: 41.87, lng: -87.65, type: "supermarket"},
+        {name: "Trader Joe's", lat: 41.92, lng: -87.67, type: "supermarket"},
+        {name: "Mariano's", lat: 41.85, lng: -87.68, type: "supermarket"},
+        {name: "Walmart Supercenter", lat: 41.80, lng: -87.60, type: "supermarket"},
+        {name: "Food 4 Less", lat: 41.76, lng: -87.66, type: "supermarket"},
+        {name: "Pete's Fresh Market", lat: 41.88, lng: -87.70, type: "supermarket"},
+        {name: "Tony's Fresh Market", lat: 41.72, lng: -87.62, type: "supermarket"},
+        {name: "Cermak Fresh Market", lat: 41.86, lng: -87.72, type: "supermarket"}
     ]
 };
 
-function initMap(){
+function initMap() {
     map = L.map('map').setView(DEMO.center, DEMO.zoom);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
-        attribution:'© OpenStreetMap'
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap'
     }).addTo(map);
 }
 
-function setLoading(on){
-    document.getElementById('loading').classList.toggle('active',on);
+function setLoading(on) {
+    document.getElementById('loading').classList.toggle('active', on);
 }
 
-function clearStores(){
-    storeMarkers.forEach(m=>map.removeLayer(m));
-    storeMarkers=[];
+function clearStores() {
+    storeMarkers.forEach(m => map.removeLayer(m));
+    storeMarkers = [];
 }
 
-function analyzeCity(){
-    const city = document.getElementById('cityInput').value;
-    setLoading(true);
+function clearRiskLayer() {
+    if (riskLayer) {
+        map.removeLayer(riskLayer);
+        riskLayer = null;
+    }
+    if (heatLayer) {
+        map.removeLayer(heatLayer);
+        heatLayer = null;
+    }
+}
+
+function clearAll() {
     clearStores();
+    clearRiskLayer();
+    riskVisible = false;
+    document.getElementById('riskToggle').textContent = 'Show Risk Areas';
+}
 
-    if(demoMode){
-        map.setView(DEMO.center,DEMO.zoom);
-        DEMO.stores.forEach(s=>{
-            const m=L.marker([s.lat,s.lng],{
-                icon:L.divIcon({className:'store-marker',html:'🏪'})
-            }).addTo(map).bindPopup(s.name);
+function updateSensitivity() {
+    const slider = document.getElementById('sensitivitySlider');
+    const value = document.getElementById('sensitivityValue');
+    const labels = ['Low', 'Medium', 'High'];
+    value.textContent = labels[slider.value - 1];
+    
+    if (riskVisible) {
+        generateRiskLayer();
+    }
+}
+
+function generateRiskLayer() {
+    clearRiskLayer();
+    
+    const sensitivity = parseInt(document.getElementById('sensitivitySlider').value);
+    const analysisMode = document.getElementById('analysisMode').value;
+    
+    // Create grid of points for risk assessment
+    const bounds = map.getBounds();
+    const northEast = bounds.getNorthEast();
+    const southWest = bounds.getSouthWest();
+    
+    const grid = [];
+    const gridSize = 0.02; // Adjust for resolution
+    
+    for (let lat = southWest.lat; lat < northEast.lat; lat += gridSize) {
+        for (let lng = southWest.lng; lng < northEast.lng; lng += gridSize) {
+            let minDistance = Infinity;
+            
+            // Calculate distance to nearest store
+            storeMarkers.forEach(marker => {
+                const storeLat = marker.getLatLng().lat;
+                const storeLng = marker.getLatLng().lng;
+                const distance = Math.sqrt(
+                    Math.pow(lat - storeLat, 2) + 
+                    Math.pow(lng - storeLng, 2)
+                ) * 111; // Convert to kilometers (approx)
+                
+                if (distance < minDistance) minDistance = distance;
+            });
+            
+            // Calculate risk based on distance
+            let risk;
+            if (analysisMode === 'income') {
+                // Simulate income-based risk (lower income areas = higher risk)
+                const baseRisk = Math.random() * 0.5 + 0.3; // Base risk 0.3-0.8
+                risk = Math.min(1, baseRisk + (minDistance / 10));
+            } else if (analysisMode === 'density') {
+                // Store density mode
+                const storesInRadius = storeMarkers.filter(marker => {
+                    const storeLat = marker.getLatLng().lat;
+                    const storeLng = marker.getLatLng().lng;
+                    const distance = Math.sqrt(
+                        Math.pow(lat - storeLat, 2) + 
+                        Math.pow(lng - storeLng, 2)
+                    ) * 111;
+                    return distance < 2; // Count stores within 2km
+                }).length;
+                risk = Math.max(0, 1 - (storesInRadius / 5)); // Higher density = lower risk
+            } else {
+                // Distance mode
+                risk = Math.min(1, minDistance / (8 - sensitivity)); // Adjust divisor based on sensitivity
+            }
+            
+            // Create colored circle based on risk
+            let color;
+            if (risk > 0.7) color = '#ef4444'; // High risk - red
+            else if (risk > 0.4) color = '#f59e0b'; // Medium risk - yellow
+            else color = '#10b981'; // Low risk - green
+            
+            const opacity = 0.6;
+            
+            // Add to grid for heatmap
+            grid.push([lat, lng, risk * 10]);
+            
+            // Create overlay polygon
+            const rect = L.rectangle([
+                [lat, lng],
+                [lat + gridSize, lng + gridSize]
+            ], {
+                color: color,
+                fillColor: color,
+                fillOpacity: opacity,
+                weight: 0,
+                interactive: false
+            });
+            
+            if (!riskLayer) {
+                riskLayer = L.layerGroup();
+                riskLayer.addTo(map);
+            }
+            riskLayer.addLayer(rect);
+        }
+    }
+    
+    // Add heatmap overlay
+    heatLayer = L.heatLayer(grid, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 16,
+        gradient: {
+            0.1: '#10b981', // Green - low risk
+            0.5: '#f59e0b', // Yellow - medium risk
+            1.0: '#ef4444'  // Red - high risk
+        }
+    }).addTo(map);
+}
+
+function toggleRiskLayer() {
+    if (riskVisible) {
+        clearRiskLayer();
+        document.getElementById('riskToggle').textContent = 'Show Risk Areas';
+        riskVisible = false;
+    } else {
+        if (storeMarkers.length === 0) {
+            alert('Please analyze a city first to generate stores.');
+            return;
+        }
+        generateRiskLayer();
+        document.getElementById('riskToggle').textContent = 'Hide Risk Areas';
+        riskVisible = true;
+    }
+}
+
+function toggleInfo() {
+    document.getElementById('infoBox').classList.toggle('active');
+}
+
+function analyzeCity() {
+    const city = document.getElementById('cityInput').value;
+    const analysisMode = document.getElementById('analysisMode').value;
+    setLoading(true);
+    clearAll();
+
+    if (demoMode) {
+        map.setView(DEMO.center, DEMO.zoom);
+        
+        // Clear previous markers
+        clearStores();
+        
+        // Add store markers
+        DEMO.stores.forEach(s => {
+            const m = L.marker([s.lat, s.lng], {
+                icon: L.divIcon({ className: 'store-marker', html: '🛒' })
+            }).addTo(map).bindPopup(`<strong>${s.name}</strong><br>${s.type}`);
             storeMarkers.push(m);
         });
+        
         setLoading(false);
     } else {
         analyzeLive(city);
     }
 }
 
-async function analyzeLive(city){
-    try{
-        const geo = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`,{
-            headers:{'User-Agent':'FoodDesertMapper'}
+async function analyzeLive(city) {
+    try {
+        const geo = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`, {
+            headers: { 'User-Agent': 'FoodDesertMapper' }
         });
         const data = await geo.json();
-        if(!data.length) throw "City not found";
+        if (!data.length) throw "City not found";
 
-        const {lat,lon,boundingbox} = data[0];
-        map.setView([lat,lon],11);
+        const { lat, lon, boundingbox } = data[0];
+        map.setView([lat, lon], 11);
 
         const query = `
         [out:json];
         node["shop"="supermarket"](${boundingbox[0]},${boundingbox[2]},${boundingbox[1]},${boundingbox[3]});
         out;
         `;
-        const res = await fetch("https://overpass-api.de/api/interpreter",{method:"POST",body:query});
+        const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
         const osm = await res.json();
 
-        osm.elements.forEach(e=>{
-            const m=L.marker([e.lat,e.lon],{
-                icon:L.divIcon({className:'store-marker',html:'🏪'})
-            }).addTo(map).bindPopup(e.tags?.name||"Supermarket");
+        osm.elements.forEach(e => {
+            const m = L.marker([e.lat, e.lon], {
+                icon: L.divIcon({ className: 'store-marker', html: '🛒' })
+            }).addTo(map).bindPopup(e.tags?.name || "Supermarket");
             storeMarkers.push(m);
         });
 
-    } catch(err){
+    } catch (err) {
         alert("Live data failed — falling back to demo.");
         demoMode = true;
         updateStatus();
@@ -207,17 +512,46 @@ async function analyzeLive(city){
     }
 }
 
-function toggleLive(){
-    demoMode=!demoMode;
+function toggleLive() {
+    demoMode = !demoMode;
     updateStatus();
 }
 
-function updateStatus(){
+function updateStatus() {
     document.getElementById('apiStatus').textContent =
         demoMode ? "🔸 DEMO MODE" : "✅ LIVE OSM DATA";
 }
 
-window.onload=()=>{
+function generateReport() {
+    const riskAreas = riskLayer ? "Detected" : "Not analyzed";
+    const storeCount = storeMarkers.length;
+    const city = document.getElementById('cityInput').value;
+    
+    const report = `
+Food Desert Analysis Report
+===========================
+City: ${city}
+Stores Found: ${storeCount}
+Risk Areas: ${riskAreas}
+Analysis Mode: ${document.getElementById('analysisMode').value}
+Sensitivity: ${document.getElementById('sensitivityValue').textContent}
+Timestamp: ${new Date().toLocaleString()}
+
+${storeCount > 0 ? '✓ Store data loaded successfully' : '⚠ No stores found'}
+${riskVisible ? '✓ Risk analysis complete' : '⚠ Risk analysis not performed'}
+
+Recommendations:
+${storeCount < 5 ? '• Consider adding more supermarkets in underserved areas' : '• Store density appears adequate'}
+${storeCount === 0 ? '• URGENT: No supermarkets detected in this area' : ''}
+    `;
+    
+    alert(report);
+    
+    // Optionally, you could implement PDF generation here
+    console.log("Report generated:", report);
+}
+
+window.onload = () => {
     initMap();
     analyzeCity();
 };

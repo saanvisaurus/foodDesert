@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Food Desert Mapper</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+body {
+    margin: 0;
+    font-family: Archivo, sans-serif;
+    background: #f8f9fa;
+}
+.app-container {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    height: 100vh;
+}
+.sidebar {
+    background: white;
+    border-right: 2px solid #e5e7eb;
+    overflow-y: auto;
+}
+.header {
+    background: linear-gradient(135deg,#1e293b,#334155);
+    color: white;
+    padding: 24px;
+}
+.header h1 { margin: 0; font-weight: 900; }
+.header p { font-family: JetBrains Mono; font-size: .8rem; opacity: .8; }
+
+.control-section { padding: 20px; border-bottom: 1px solid #e5e7eb; }
+.control-section h2 {
+    font-size: .8rem;
+    letter-spacing: 1px;
+    color: #6b7280;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.search-input, button {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 2px solid #e5e7eb;
+    font-size: 1rem;
+}
+
+button {
+    background: #2563eb;
+    color: white;
+    border: none;
+    font-family: JetBrains Mono;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+button.secondary {
+    background: #e5e7eb;
+    color: #111827;
+}
+
+.map-container { position: relative; }
+#map { height: 100vh; }
+
+.api-status {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #fef3c7;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-family: JetBrains Mono;
+    font-size: .75rem;
+    border: 2px solid #f59e0b;
+    z-index: 500;
+}
+
+.store-marker { font-size: 24px; }
+
+.loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,.9);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-family: JetBrains Mono;
+    z-index: 1000;
+}
+.loading.active { display: flex; }
+</style>
+</head>
+
+<body>
+<div class="app-container">
+    <div class="sidebar">
+        <div class="header">
+            <h1>Food Desert Mapper</h1>
+            <p>Geospatial Analysis Tool</p>
+        </div>
+
+        <div class="control-section">
+            <h2>City</h2>
+            <input id="cityInput" class="search-input" value="Chicago, IL"/>
+            <button onclick="analyzeCity()">Analyze Food Access</button>
+            <button class="secondary" onclick="toggleLive()">Toggle Live Data</button>
+        </div>
+    </div>
+
+    <div class="map-container">
+        <div id="map"></div>
+        <div class="api-status" id="apiStatus">🔸 DEMO MODE</div>
+        <div class="loading" id="loading">Analyzing…</div>
+    </div>
+</div>
+
+<script>
+let map;
+let demoMode = true;
+let storeMarkers = [];
+
+const DEMO = {
+    center: [41.8781,-87.6298],
+    zoom: 11,
+    stores: [
+        {name:"Whole Foods",lat:41.89,lng:-87.64},
+        {name:"Aldi",lat:41.83,lng:-87.63},
+        {name:"Jewel-Osco",lat:41.87,lng:-87.65}
+    ]
+};
+
+function initMap(){
+    map = L.map('map').setView(DEMO.center, DEMO.zoom);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+        attribution:'© OpenStreetMap'
+    }).addTo(map);
+}
+
+function setLoading(on){
+    document.getElementById('loading').classList.toggle('active',on);
+}
+
+function clearStores(){
+    storeMarkers.forEach(m=>map.removeLayer(m));
+    storeMarkers=[];
+}
+
+function analyzeCity(){
+    const city = document.getElementById('cityInput').value;
+    setLoading(true);
+    clearStores();
+
+    if(demoMode){
+        map.setView(DEMO.center,DEMO.zoom);
+        DEMO.stores.forEach(s=>{
+            const m=L.marker([s.lat,s.lng],{
+                icon:L.divIcon({className:'store-marker',html:'🏪'})
+            }).addTo(map).bindPopup(s.name);
+            storeMarkers.push(m);
+        });
+        setLoading(false);
+    } else {
+        analyzeLive(city);
+    }
+}
+
+async function analyzeLive(city){
+    try{
+        const geo = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`,{
+            headers:{'User-Agent':'FoodDesertMapper'}
+        });
+        const data = await geo.json();
+        if(!data.length) throw "City not found";
+
+        const {lat,lon,boundingbox} = data[0];
+        map.setView([lat,lon],11);
+
+        const query = `
+        [out:json];
+        node["shop"="supermarket"](${boundingbox[0]},${boundingbox[2]},${boundingbox[1]},${boundingbox[3]});
+        out;
+        `;
+        const res = await fetch("https://overpass-api.de/api/interpreter",{method:"POST",body:query});
+        const osm = await res.json();
+
+        osm.elements.forEach(e=>{
+            const m=L.marker([e.lat,e.lon],{
+                icon:L.divIcon({className:'store-marker',html:'🏪'})
+            }).addTo(map).bindPopup(e.tags?.name||"Supermarket");
+            storeMarkers.push(m);
+        });
+
+    } catch(err){
+        alert("Live data failed — falling back to demo.");
+        demoMode = true;
+        updateStatus();
+        analyzeCity();
+    } finally {
+        setLoading(false);
+    }
+}
+
+function toggleLive(){
+    demoMode=!demoMode;
+    updateStatus();
+}
+
+function updateStatus(){
+    document.getElementById('apiStatus').textContent =
+        demoMode ? "🔸 DEMO MODE" : "✅ LIVE OSM DATA";
+}
+
+window.onload=()=>{
+    initMap();
+    analyzeCity();
+};
+</script>
+</body>
+</html>
